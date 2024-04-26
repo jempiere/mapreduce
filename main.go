@@ -1,4 +1,4 @@
-package mapreduce
+package main
 
 import (
 	"fmt"
@@ -8,7 +8,13 @@ import (
 
 func main() {
 	fmt.Printf("Hello, World!\n")
-	localhost()
+	var err = splitDatabase("files/austen.db", []string{
+		"files/austen-0.db", "files/austen-1.db", "files/austen-2.db",
+		"files/austen-3.db", "files/austen-4.db", "files/austen-5.db",
+		"files/austen-6.db", "files/austen-7.db", "files/austen-8.db"})
+	fmt.Printf("lgima\n")
+	fmt.Printf("ERROR: %v\n", err)
+	// localhost()
 }
 
 func localhost() {

@@ -1,4 +1,4 @@
-package mapreduce
+package main
 
 import (
 	"database/sql"
@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func openDatabase(path string) (*sql.DB, error) {
@@ -64,15 +66,18 @@ func createDatabase(path string) (*sql.DB, error) {
 }
 
 func splitDatabase(source string, paths []string) error {
+	// fmt.Printf("lig0\n")
 	db, err := openDatabase(source)
 	if err != nil {
 		return err
 	}
+	// fmt.Printf("lig1\n")
 	defer db.Close()
 
 	// create output databases
 	var outs []*sql.DB
 	var inserts []*sql.Stmt
+	// fmt.Printf("lig2\n")
 	defer func() {
 		for i, insert := range inserts {
 			if insert != nil {
@@ -87,6 +92,7 @@ func splitDatabase(source string, paths []string) error {
 			outs[i] = nil
 		}
 	}()
+	// fmt.Printf("lig3\n")
 	for _, path := range paths {
 		out, err := createDatabase(path)
 		if err != nil {
@@ -100,6 +106,7 @@ func splitDatabase(source string, paths []string) error {
 		}
 		inserts = append(inserts, insert)
 	}
+	// fmt.Printf("lig4\n")
 
 	// process input pairs
 	dbi := 0
@@ -108,6 +115,7 @@ func splitDatabase(source string, paths []string) error {
 		log.Printf("error in select query from database to split: %v", err)
 		return err
 	}
+	// fmt.Printf("lig5\n")
 	defer rows.Close()
 	for rows.Next() {
 		var key, value string
