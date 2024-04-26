@@ -22,3 +22,5 @@ func localhost() {
 		}
 	}()
 }
+
+// bogos binted
