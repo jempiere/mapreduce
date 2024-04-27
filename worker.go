@@ -46,7 +46,9 @@ func (self *MapTask) Process(tempdir string, client Interface) error {
 	var dl_err = download("http://"+self.SourceHost+"/data/"+mapSourceFile(self.N), pfile) //donwload sourcehost
 	if dl_err != nil {
 		log.Printf("DOWNLOAD FAIL! BROH: '%v'\n", dl_err)
+		return dl_err
 	}
+	log.Printf("successful download: '%v'\n", "http://"+self.SourceHost+"/data/"+mapSourceFile(self.N))
 	var dl_handle, err = openDatabase(pfile) //open it
 
 	if err != nil {
