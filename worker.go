@@ -1,7 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net"
 	"net/http"
@@ -32,6 +34,77 @@ type Pair struct {
 type Interface interface {
 	Map(key, value string, output chan<- Pair) error
 	Reduce(key string, values <-chan string, output chan<- Pair) error
+}
+
+// MAP STUFF
+func (self *MapTask) Process(tempdir string, client Interface) error {
+	fmt.Printf("WHOAMI: '%v'\n", self.SourceHost)
+	// fmt.Printf("WHAT WE GOT: tempdir:'%v', client:'%v'\n", tempdir, client)
+	// return nil
+
+	var pfile = tempdir + "/" + mapSourceFile(self.N)                                      //outdir
+	var dl_err = download("http://"+self.SourceHost+"/data/"+mapSourceFile(self.N), pfile) //donwload sourcehost
+	if dl_err != nil {
+		log.Printf("DOWNLOAD FAIL! BROH: '%v'\n", dl_err)
+	}
+	var dl_handle, err = openDatabase(pfile) //open it
+
+	if err != nil {
+		log.Printf("DATABSE OPEN FAIL! BROH: '%v'\n", err)
+		return err
+	}
+	defer dl_handle.Close()
+
+	//collect outputfiles into `db_handles`
+	var db_handles [](*sql.DB)
+	for i := 0; i < self.R; i++ { //number of outputs is same as number of reduce tasks
+		var localpath = tempdir + "/" + mapOutputFile(self.N, i)
+		var db_handle, err = createDatabase(localpath)
+		if err != nil {
+			log.Printf("CREATE FAIL! HERES WHY BROH: '%v'\n", err)
+			return err
+		}
+		db_handles = append(db_handles, db_handle)
+		defer db_handle.Close() //for later
+	}
+
+	//loop over source key/value pairs
+	rows, err := dl_handle.Query("select key, value from pairs")
+	if err != nil {
+		log.Printf("SELECT FAIL! REASON BROH: '%v'\n", err)
+		return err
+	}
+	var output = make(chan Pair)
+	for rows.Next() {
+		var key, val string
+		if err := rows.Scan(&key, &val); err != nil {
+			log.Printf("SCAN ERROR BROH: '%v'\n", err)
+			return err
+		}
+		go client.Map(key, val, output) //maybe bad
+	}
+
+	for pair := range output { //recieved is a pair
+		var hash = fnv.New32()
+		hash.Write([]byte(pair.Key))
+		var r = int(hash.Sum32() % uint32(self.R)) //hash the recieved value
+
+		var db_in_question = db_handles[r]
+		var stmnt, err = db_in_question.Prepare("insert into pairs (key, value) values (?, ?)")
+		if err != nil {
+			log.Printf("PREPARERROR BROH: '%v'\n", err)
+			return err
+		}
+		if _, err := stmnt.Exec(pair.Key, pair.Value); err != nil { //insert into database
+			log.Printf("INSERT ERROR BROH: '%v'\n", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (task *ReduceTask) Process(tempdir string, client Interface) error {
+	return nil
 }
 
 func mapSourceFile(m int) string       { return fmt.Sprintf("map_%d_source.db", m) }
@@ -171,12 +244,14 @@ func main() {
 		}
 	}
 
-	// process the reduce tasks
-	for i, task := range reduceTasks {
-		if err := task.Process(tempdir, client); err != nil {
-			log.Fatalf("processing reduce task %d: %v", i, err)
-		}
-	}
+	// // process the reduce tasks
+	fmt.Printf("Skipping reduceTasks...")
+	// for i, task := range reduceTasks {
+	// 	if err := task.Process(tempdir, client); err != nil {
+	// 		log.Fatalf("processing reduce task %d: %v", i, err)
+	// 	}
+	// }
 
 	// gather outputs into final target.db file
+	fmt.Printf("Done!")
 }
