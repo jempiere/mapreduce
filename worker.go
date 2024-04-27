@@ -42,14 +42,16 @@ func (self *MapTask) Process(tempdir string, client Interface) error {
 	// fmt.Printf("WHAT WE GOT: tempdir:'%v', client:'%v'\n", tempdir, client)
 	// return nil
 
-	var pfile = tempdir + "/" + mapSourceFile(self.N)                                      //outdir
-	var dl_err = download("http://"+self.SourceHost+"/data/"+mapSourceFile(self.N), pfile) //donwload sourcehost
+	var dst_handle = tempdir + "/" + mapInputFile(self.N)
+	var src_handle = "http://" + self.SourceHost + "/data/" + mapSourceFile(self.N)
+
+	var dl_err = download(src_handle, dst_handle) //the file at dst_handle will become src_handle
 	if dl_err != nil {
 		log.Printf("DOWNLOAD FAIL! BROH: '%v'\n", dl_err)
 		return dl_err
 	}
-	log.Printf("successful download: '%v'\n", "http://"+self.SourceHost+"/data/"+mapSourceFile(self.N))
-	var dl_handle, err = openDatabase(pfile) //open it
+	log.Printf("succesful download: '%v'\n", src_handle)
+	var dl_handle, err = openDatabase(dst_handle) //open it
 
 	if err != nil {
 		log.Printf("DATABSE OPEN FAIL! BROH: '%v'\n", err)
@@ -76,32 +78,63 @@ func (self *MapTask) Process(tempdir string, client Interface) error {
 		log.Printf("SELECT FAIL! REASON BROH: '%v'\n", err)
 		return err
 	}
-	var output = make(chan Pair)
+	// var output = make(chan Pair)
+	var whiteflag = make(chan string)
+
 	for rows.Next() {
 		var key, val string
+		var output = make(chan Pair)
 		if err := rows.Scan(&key, &val); err != nil {
 			log.Printf("SCAN ERROR BROH: '%v'\n", err)
 			return err
 		}
+		// fmt.Printf("mapping...\n")
 		go client.Map(key, val, output) //maybe bad
+		go func(oni <-chan Pair) {
+			defer func() {
+				whiteflag <- ""
+			}()
+			for pair := range oni {
+				var hash = fnv.New32()
+				hash.Write([]byte(pair.Key))
+				var r = int(hash.Sum32() % uint32(self.R))
+
+				var db_in_question = db_handles[r]
+				var stmnt, err = db_in_question.Prepare("insert into pairs (key, value) values (?, ?)")
+				if err != nil {
+					log.Printf("PREP ERR BROH: '%v'\n", err)
+					fmt.Printf("ECLOSE ")
+					return
+				}
+				if _, err := stmnt.Exec(pair.Key, pair.Value); err != nil {
+					log.Printf("INSERT ERR BROH: '%v'\n", err)
+					fmt.Printf("ICLOSE ")
+					return
+				}
+			}
+			// fmt.Printf("!close ")
+		}(output)
+		for _ = range whiteflag {
+			break
+		}
 	}
 
-	for pair := range output { //recieved is a pair
-		var hash = fnv.New32()
-		hash.Write([]byte(pair.Key))
-		var r = int(hash.Sum32() % uint32(self.R)) //hash the recieved value
+	// for pair := range output { //recieved is a pair
+	// 	var hash = fnv.New32()
+	// 	hash.Write([]byte(pair.Key))
+	// 	var r = int(hash.Sum32() % uint32(self.R)) //hash the recieved value
 
-		var db_in_question = db_handles[r]
-		var stmnt, err = db_in_question.Prepare("insert into pairs (key, value) values (?, ?)")
-		if err != nil {
-			log.Printf("PREPARERROR BROH: '%v'\n", err)
-			return err
-		}
-		if _, err := stmnt.Exec(pair.Key, pair.Value); err != nil { //insert into database
-			log.Printf("INSERT ERROR BROH: '%v'\n", err)
-			return err
-		}
-	}
+	// 	var db_in_question = db_handles[r]
+	// 	var stmnt, err = db_in_question.Prepare("insert into pairs (key, value) values (?, ?)")
+	// 	if err != nil {
+	// 		log.Printf("PREPARERROR BROH: '%v'\n", err)
+	// 		return err
+	// 	}
+	// 	if _, err := stmnt.Exec(pair.Key, pair.Value); err != nil { //insert into database
+	// 		log.Printf("INSERT ERROR BROH: '%v'\n", err)
+	// 		return err
+	// 	}
+	// }
 	return nil
 }
 
@@ -175,7 +208,7 @@ func main() {
 	source := "source.db"
 	//target := "target.db"
 	tmp := os.TempDir()
-
+	log.Printf("Your temporary directory: %vmapreduce.%d\n", tmp, os.Getpid())
 	tempdir := filepath.Join(tmp, fmt.Sprintf("mapreduce.%d", os.Getpid()))
 	if err := os.RemoveAll(tempdir); err != nil {
 		log.Fatalf("unable to delete old temp dir: %v", err)
@@ -183,7 +216,7 @@ func main() {
 	if err := os.Mkdir(tempdir, 0700); err != nil {
 		log.Fatalf("unable to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempdir)
+	// defer os.RemoveAll(tempdir)
 
 	log.Printf("splitting %s into %d pieces", source, m)
 	var paths []string
@@ -197,7 +230,9 @@ func main() {
 	myAddress := net.JoinHostPort(getLocalAddress(), "3410")
 	log.Printf("starting http server at %s", myAddress)
 	http.Handle("/data/", http.StripPrefix("/data", http.FileServer(http.Dir(tempdir))))
-
+	fmt.Printf("hanging...\n")
+	// for {
+	// }
 	// bind on the port before launching the background goroutine on Serve
 	// to prevent race condition with call to download below
 	listener, err := net.Listen("tcp", myAddress)
@@ -247,7 +282,7 @@ func main() {
 	}
 
 	// // process the reduce tasks
-	fmt.Printf("Skipping reduceTasks...")
+	fmt.Printf("Skipping reduceTasks...\n")
 	// for i, task := range reduceTasks {
 	// 	if err := task.Process(tempdir, client); err != nil {
 	// 		log.Fatalf("processing reduce task %d: %v", i, err)
@@ -255,5 +290,5 @@ func main() {
 	// }
 
 	// gather outputs into final target.db file
-	fmt.Printf("Done!")
+	fmt.Printf("Done!\n")
 }
