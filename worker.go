@@ -138,9 +138,6 @@ func (self *MapTask) Process(tempdir string, client Interface) error {
 	return nil
 }
 
-func (task *ReduceTask) Process(tempdir string, client Interface) error {
-	return nil
-}
 
 func mapSourceFile(m int) string       { return fmt.Sprintf("map_%d_source.db", m) }
 func mapInputFile(m int) string        { return fmt.Sprintf("map_%d_input.db", m) }
@@ -283,12 +280,85 @@ func main() {
 
 	// // process the reduce tasks
 	fmt.Printf("Skipping reduceTasks...\n")
-	// for i, task := range reduceTasks {
-	// 	if err := task.Process(tempdir, client); err != nil {
-	// 		log.Fatalf("processing reduce task %d: %v", i, err)
-	// 	}
-	// }
+	for i, task := range reduceTasks {
+		if err := task.Process(tempdir, client); err != nil {
+			log.Fatalf("processing reduce task %d: %v", i, err)
+		}
+	}
 
 	// gather outputs into final target.db file
 	fmt.Printf("Done!\n")
+}
+
+
+
+func (task *ReduceTask) Process(tempdir string, client Interface) error {
+    var urls []string
+    var db, outdb *sql.DB
+    var err error
+    for r := 0; r < task.R; r++ {
+        urls = append(urls, "http://" + task.SourceHosts[r] + "/data/" + mapOutputFile(task.M, r))
+    }
+    db, err = mergeDatabases(urls, reduceInputFile(task.R), tempdir)
+    if err != nil {
+        return err
+    }
+    outdb, err = createDatabase(reduceOutputFile(task.R))
+    
+    defer db.Close()
+    if err != nil {
+        fmt.Printf("ERROR: %v\n", err)
+    }
+    var rows, err1 = db.Query("select key, value from pairs order by key, value")
+    if err1 != nil {
+        return err1
+    }
+    var statm, err2 = outdb.Prepare("insert into pairs (key, value) values (?, ?)")
+    if err2 != nil {
+        return err2
+    }
+    
+    var pkey, key, value string
+    var values chan string
+    var output chan Pair
+    var whoo bool = false
+    
+    var uniqueSlap = func(key string) error {
+        if whoo == true {
+            close(values)
+            var out = <-output
+            _, err = statm.Exec(out.Key, out.Value)
+            if err != nil {
+                return nil
+            }
+        } else {
+            whoo = true
+        }
+        values = make(chan string)
+        output = make(chan Pair)
+        var err = client.Reduce(key, values, output)
+        if err != nil {
+            return err
+        }
+        return nil
+    }
+    
+	for rows.Next() {
+        err := rows.Scan(&key, &value)
+		if err != nil {
+			return err
+		}
+        if key != pkey {
+            var err = uniqueSlap(key)
+            if err != nil {
+                return err
+            }
+        }
+        pkey = key
+    }
+    err = uniqueSlap(key)
+    if err != nil {
+        return err
+    }
+    return nil
 }
