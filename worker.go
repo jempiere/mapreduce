@@ -299,11 +299,11 @@ func (task *ReduceTask) Process(tempdir string, client Interface) error {
     for r := 0; r < task.R; r++ {
         urls = append(urls, "http://" + task.SourceHosts[r] + "/data/" + mapOutputFile(task.M-1, r))
     }
-    db, err = mergeDatabases(urls, reduceInputFile(task.N), tempdir)
+    db, err = mergeDatabases(urls, tempdir + "/" + reduceInputFile(task.N), tempdir)
     if err != nil {
         return err
     }
-    outdb, err = createDatabase(reduceOutputFile(task.N))
+    outdb, err = createDatabase(tempdir + "/" + reduceOutputFile(task.N))
     
     defer db.Close()
     if err != nil {
