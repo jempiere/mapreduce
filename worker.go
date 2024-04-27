@@ -138,7 +138,6 @@ func (self *MapTask) Process(tempdir string, client Interface) error {
 	return nil
 }
 
-
 func mapSourceFile(m int) string       { return fmt.Sprintf("map_%d_source.db", m) }
 func mapInputFile(m int) string        { return fmt.Sprintf("map_%d_input.db", m) }
 func mapOutputFile(m, r int) string    { return fmt.Sprintf("map_%d_output_%d.db", m, r) }
@@ -290,75 +289,77 @@ func main() {
 	fmt.Printf("Done!\n")
 }
 
-
-
 func (task *ReduceTask) Process(tempdir string, client Interface) error {
-    var urls []string
-    var db, outdb *sql.DB
-    var err error
-    for r := 0; r < task.R; r++ {
-        urls = append(urls, "http://" + task.SourceHosts[r] + "/data/" + mapOutputFile(task.M-1, r))
-    }
-    db, err = mergeDatabases(urls, tempdir + "/" + reduceInputFile(task.N), tempdir)
-    if err != nil {
-        return err
-    }
-    outdb, err = createDatabase(tempdir + "/" + reduceOutputFile(task.N))
-    
-    defer db.Close()
-    if err != nil {
-        fmt.Printf("ERROR: %v\n", err)
-    }
-    var rows, err1 = db.Query("select key, value from pairs order by key, value")
-    if err1 != nil {
-        return err1
-    }
-    var statm, err2 = outdb.Prepare("insert into pairs (key, value) values (?, ?)")
-    if err2 != nil {
-        return err2
-    }
-    
-    var pkey, key, value string
-    var values chan string
-    var output chan Pair
-    var whoo bool = false
-    
-    var uniqueSlap = func(key string) error {
-        if whoo == true {
-            close(values)
-            var out = <-output
-            _, err = statm.Exec(out.Key, out.Value)
-            if err != nil {
-                return nil
-            }
-        } else {
-            whoo = true
-        }
-        values = make(chan string)
-        output = make(chan Pair)
-        var err = client.Reduce(key, values, output)
-        if err != nil {
-            return err
-        }
-        return nil
-    }
-    
-	for rows.Next() {
-        err := rows.Scan(&key, &value)
+	var urls []string
+	var db, outdb *sql.DB
+	var err error
+	for r := 0; r < task.R; r++ {
+		urls = append(urls, "http://"+task.SourceHosts[r]+"/data/"+mapOutputFile(task.N, r))
+	}
+	for _, url := range urls {
+		fmt.Printf("URL: %v\n", url)
+	}
+	fmt.Printf("DB P2, P3: %v, %v\n", tempdir+"/"+reduceInputFile(task.N), tempdir)
+	db, err = mergeDatabases(urls, tempdir+"/"+reduceInputFile(task.N), tempdir+"/"+reducePartialFile(task.N))
+	if err != nil {
+		return err
+	}
+	outdb, err = createDatabase(tempdir + "/" + reduceOutputFile(task.N))
+
+	defer db.Close()
+	if err != nil {
+		fmt.Printf("ERROR: %v\n", err)
+	}
+	var rows, err1 = db.Query("select key, value from pairs order by key, value")
+	if err1 != nil {
+		return err1
+	}
+	var statm, err2 = outdb.Prepare("insert into pairs (key, value) values (?, ?)")
+	if err2 != nil {
+		return err2
+	}
+
+	var pkey, key, value string
+	var values chan string
+	var output chan Pair
+	var whoo bool = false
+
+	var uniqueSlap = func(key string) error {
+		if whoo == true {
+			close(values)
+			var out = <-output
+			_, err = statm.Exec(out.Key, out.Value)
+			if err != nil {
+				return nil
+			}
+		} else {
+			whoo = true
+		}
+		values = make(chan string)
+		output = make(chan Pair)
+		var err = client.Reduce(key, values, output)
 		if err != nil {
 			return err
 		}
-        if key != pkey {
-            var err = uniqueSlap(key)
-            if err != nil {
-                return err
-            }
-        }
-        pkey = key
-    }
-    err = uniqueSlap(key)
-    if err != nil {
-        return err
-    }
-    return nil
+		return nil
+	}
+
+	for rows.Next() {
+		err := rows.Scan(&key, &value)
+		if err != nil {
+			return err
+		}
+		if key != pkey {
+			var err = uniqueSlap(key)
+			if err != nil {
+				return err
+			}
+		}
+		pkey = key
+	}
+	err = uniqueSlap(key)
+	if err != nil {
+		return err
+	}
+	return nil
 }
