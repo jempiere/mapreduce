@@ -289,7 +289,7 @@ func main() {
 	fmt.Printf("Done!\n")
 }
 
-func (task *ReduceTask) Process(tempdir string, client Interface) error {
+func (task *ReduceTask) Process2(tempdir string, client Interface) error {
 	var urls []string
 	var db, outdb *sql.DB
 	var err error
