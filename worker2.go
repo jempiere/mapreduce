@@ -1,6 +1,6 @@
 package main
 
-func (self *ReduceTask) Process(tempdir string, client Interface) error {
+func (self *ReduceTask) Process2(tempdir string, client Interface) error {
 	var urls []string
 	//merge all output databases from the map phase. This requires downloading relevant ones
 	//a reducetask's unique identifier is its self.N

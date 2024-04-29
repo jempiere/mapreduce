@@ -38,7 +38,7 @@ type Interface interface {
 
 // MAP STUFF
 func (self *MapTask) Process(tempdir string, client Interface) error {
-	fmt.Printf("WHOAMI: '%v'\n", self.SourceHost)
+	//fmt.Printf("WHOAMI: '%v'\n", self.SourceHost)
 	// fmt.Printf("WHAT WE GOT: tempdir:'%v', client:'%v'\n", tempdir, client)
 	// return nil
 
@@ -201,7 +201,7 @@ func (c Client) Reduce(key string, values <-chan string, output chan<- Pair) err
 func main() {
 	m := 10
 	r := 5
-	source := "source.db"
+	source := "files/austen.db"
 	//target := "target.db"
 	tmp := os.TempDir()
 	log.Printf("Your temporary directory: %vmapreduce.%d\n", tmp, os.Getpid())
@@ -226,7 +226,7 @@ func main() {
 	myAddress := net.JoinHostPort(getLocalAddress(), "3410")
 	log.Printf("starting http server at %s", myAddress)
 	http.Handle("/data/", http.StripPrefix("/data", http.FileServer(http.Dir(tempdir))))
-	fmt.Printf("hanging...\n")
+	//fmt.Printf("hanging...\n")
 	// for {
 	// }
 	// bind on the port before launching the background goroutine on Serve
@@ -278,88 +278,133 @@ func main() {
 	}
 
 	// // process the reduce tasks
-	fmt.Printf("Skipping reduceTasks...\n")
+	fmt.Printf("Running reduceTasks...\n")
 	for i, task := range reduceTasks {
 		if err := task.Process(tempdir, client); err != nil {
 			log.Fatalf("processing reduce task %d: %v", i, err)
 		}
 	}
+    
+    // gather outputs into final target.db file
+    fmt.Printf("Running final consolidation task...\n")
+    if err := finalConsolidate(tempdir, myAddress, len(reduceTasks), client); err != nil {
+        log.Fatalf("processing final consolidation task: %v", err)
+    }
 
-	// gather outputs into final target.db file
 	fmt.Printf("Done!\n")
 }
 
-func (task *ReduceTask) Process2(tempdir string, client Interface) error {
+func finalConsolidate(tempdir, host string, length int, client Interface) error {
+    var urls []string
+	var indb, outdb *sql.DB
+	var err error
+    
+    for n := 0; n < length; n++ {
+		urls = append(urls, makeURL(host, reduceOutputFile(n)))
+	}
+    indb, err = mergeDatabases(urls, tempdir+"/final_merged", tempdir+"/final_temp")
+    if err != nil {
+        return err
+    }
+    defer indb.Close()
+    
+    outdb, err = createDatabase("files/target.db")
+    if err != nil {
+        return err
+    }
+    defer outdb.Close()
+    
+    err = Reduce(indb, outdb, client)
+    if err != nil {
+        return err
+    }
+    
+    var rows, err1 = outdb.Query("select key, value from pairs order by cast(value as integer)")
+	if err1 != nil {
+		return err1
+	}
+    
+    var key, value string
+    for rows.Next() {
+        err := rows.Scan(&key, &value)
+        if err != nil {
+            return err
+        }
+        fmt.Println(key, ", ", value)
+    }
+    return nil
+}
+
+func (task *ReduceTask) Process(tempdir string, client Interface) error {
 	var urls []string
 	var db, outdb *sql.DB
 	var err error
-	for r := 0; r < task.R; r++ {
-		urls = append(urls, "http://"+task.SourceHosts[r]+"/data/"+mapOutputFile(task.N, r))
+    
+    for n, host := range task.SourceHosts {
+		//urls = append(urls, "http://"+host+"/data/"+mapOutputFile(n, task.N))
+        urls = append(urls, makeURL(host, mapOutputFile(n, task.N)))
 	}
-	for _, url := range urls {
-		fmt.Printf("URL: %v\n", url)
-	}
-	fmt.Printf("DB P2, P3: %v, %v\n", tempdir+"/"+reduceInputFile(task.N), tempdir)
-	db, err = mergeDatabases(urls, tempdir+"/"+reduceInputFile(task.N), tempdir+"/"+reducePartialFile(task.N))
+    
+    db, err = mergeDatabases(urls, tempdir+"/"+reduceInputFile(task.N), tempdir+"/"+reducePartialFile(task.N))
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    
+    outdb, err = createDatabase(tempdir + "/" + reduceOutputFile(task.N))
 	if err != nil {
 		return err
 	}
-	outdb, err = createDatabase(tempdir + "/" + reduceOutputFile(task.N))
+    defer outdb.Close()
+    
+	err = Reduce(db, outdb, client)
+    return err
+}
 
-	defer db.Close()
+func Reduce(indb, outdb *sql.DB, client Interface) error {
+    var rows, err = indb.Query("select key, value from pairs order by key, value")
 	if err != nil {
-		fmt.Printf("ERROR: %v\n", err)
-	}
-	var rows, err1 = db.Query("select key, value from pairs order by key, value")
-	if err1 != nil {
-		return err1
+		return err
 	}
 	var statm, err2 = outdb.Prepare("insert into pairs (key, value) values (?, ?)")
 	if err2 != nil {
 		return err2
 	}
-
-	var pkey, key, value string
+    
+    var pkey, key, value string
 	var values chan string
 	var output chan Pair
-	var whoo bool = false
-
-	var uniqueSlap = func(key string) error {
-		if whoo == true {
-			close(values)
-			var out = <-output
-			_, err = statm.Exec(out.Key, out.Value)
-			if err != nil {
-				return nil
-			}
-		} else {
-			whoo = true
-		}
-		values = make(chan string)
-		output = make(chan Pair)
-		var err = client.Reduce(key, values, output)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	for rows.Next() {
-		err := rows.Scan(&key, &value)
+    
+    // reads client.Reduce output
+    var procReduce = func() error {
+        close(values)
+        var out = <-output
+        _, err = statm.Exec(out.Key, out.Value)
+        if err != nil {
+            return err
+        }
+        return nil
+    }
+    
+    for rows.Next() {
+        err := rows.Scan(&key, &value)
 		if err != nil {
 			return err
 		}
 		if key != pkey {
-			var err = uniqueSlap(key)
-			if err != nil {
-				return err
+            if pkey != "" {
+                err = procReduce()
+                if err != nil {
+                    return err
+                }
 			}
-		}
+            values = make(chan string)
+            output = make(chan Pair)
+            go client.Reduce(key, values, output)
+        }
+        values <- value
 		pkey = key
-	}
-	err = uniqueSlap(key)
-	if err != nil {
-		return err
-	}
-	return nil
+    }
+    err = procReduce()
+    return err
 }
