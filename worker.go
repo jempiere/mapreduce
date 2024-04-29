@@ -199,6 +199,18 @@ func (c Client) Reduce(key string, values <-chan string, output chan<- Pair) err
 }
 
 func main() {
+    { // test junk
+        var db, _ = openDatabase("files/austen.db")
+        var rows, err1 = db.Query("select key, value from pairs order by cast(value as integer)")
+        var key, value string
+        for rows.Next() {
+            err := rows.Scan(&key, &value)
+            if key == "1818the" {
+                fmt.Println(key, ", ", value)
+            }
+        }
+    }
+
 	m := 10
 	r := 5
 	source := "files/austen.db"
