@@ -203,6 +203,7 @@ func main() {
 	m := 10
 	r := 5
 	source := "files/austen.db"
+    //source := "files/immortal.db"
 	//target := "target.db"
 	tmp := os.TempDir()
 	log.Printf("Your temporary directory: %vmapreduce.%d\n", tmp, os.Getpid())
@@ -293,6 +294,7 @@ func main() {
     }
 
 	fmt.Printf("Done!\n")
+    for {}
 }
 
 func finalConsolidate(tempdir, host string, length int, client Interface) error {
